@@ -1,0 +1,133 @@
+{
+  "name": "proxpipe — Inference Router (Subworkflow)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "infer",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "infer-webhook",
+      "name": "Inference Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "POST body: { prompt, taskType, forceModel (optional) }"
+    },
+    {
+      "parameters": {
+        "url": "=http://localhost:8080/v1/messages",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "x-api-key",    "value": "proxpipe" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.forceModel || ($json.taskType === 'code_review' ? 'claude-sonnet-pplx' : 'gemini-2.0-flash'), max_tokens: 4096, system: $json.system || null, messages: [{ role: 'user', content: $json.prompt }] }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "try-proxy",
+      "name": "1. Try Proxy (Gemini/Perplexity)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 200],
+      "continueOnFail": true,
+      "notes": "Tries antigravity-proxy first — your paid subscriptions"
+    },
+    {
+      "parameters": {
+        "url": "https://models.inference.ai.azure.com/chat/completions",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.GITHUB_TOKEN }}" },
+            { "name": "Content-Type",  "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'user', content: $node['Inference Request'].json.prompt }], max_tokens: 4096 }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "try-github-gpt4o",
+      "name": "2. GitHub Models — GPT-4o (free)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 380],
+      "continueOnFail": true,
+      "notes": "Free GitHub Models API — 15 req/min, 150 req/day"
+    },
+    {
+      "parameters": {
+        "url": "https://models.inference.ai.azure.com/chat/completions",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.GITHUB_TOKEN }}" },
+            { "name": "Content-Type",  "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'Meta-Llama-3.1-70B-Instruct', messages: [{ role: 'user', content: $node['Inference Request'].json.prompt }], max_tokens: 4096 }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "try-github-llama",
+      "name": "3. GitHub Models — Llama 70B (free fallback)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 560],
+      "continueOnFail": true,
+      "notes": "Separate model = separate rate limit bucket"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [{
+            "value1": "={{ $node['1. Try Proxy (Gemini/Perplexity)'].json.content?.[0]?.text }}",
+            "operation": "isNotEmpty"
+          }]
+        }
+      },
+      "id": "check-proxy",
+      "name": "Proxy Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [{
+            "name": "result",
+            "value": "={{ $node['1. Try Proxy (Gemini/Perplexity)'].json.content?.[0]?.text || $node['2. GitHub Models \u2014 GPT-4o (free)'].json.choices?.[0]?.message?.content || $node['3. GitHub Models \u2014 Llama 70B (free fallback)'].json.choices?.[0]?.message?.content || 'ERROR: all models failed' }}"
+          }, {
+            "name": "model_used",
+            "value": "={{ $node['1. Try Proxy (Gemini/Perplexity)'].json.content?.[0]?.text ? 'proxy' : $node['2. GitHub Models \u2014 GPT-4o (free)'].json.choices?.[0]?.message?.content ? 'github-gpt4o' : 'github-llama' }}"
+          }]
+        }
+      },
+      "id": "collect-result",
+      "name": "Collect Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [900, 380]
+    }
+  ],
+  "connections": {
+    "Inference Request":                        { "main": [[{ "node": "1. Try Proxy (Gemini/Perplexity)",        "type": "main", "index": 0 }, { "node": "2. GitHub Models \u2014 GPT-4o (free)",         "type": "main", "index": 0 }, { "node": "3. GitHub Models \u2014 Llama 70B (free fallback)", "type": "main", "index": 0 }]] },
+    "1. Try Proxy (Gemini/Perplexity)":         { "main": [[{ "node": "Proxy Succeeded?", "type": "main", "index": 0 }]] },
+    "2. GitHub Models \u2014 GPT-4o (free)":      { "main": [[{ "node": "Collect Result",   "type": "main", "index": 0 }]] },
+    "3. GitHub Models \u2014 Llama 70B (free fallback)": { "main": [[{ "node": "Collect Result", "type": "main", "index": 0 }]] },
+    "Proxy Succeeded?":                         { "main": [[{ "node": "Collect Result",   "type": "main", "index": 0 }], [{ "node": "Collect Result", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "proxpipe" }, { "name": "inference" }, { "name": "subworkflow" }]
+}
