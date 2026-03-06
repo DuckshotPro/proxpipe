@@ -1,0 +1,104 @@
+{
+  "name": "proxpipe — Circle Workflow Phase 1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github-projects",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "GitHub Projects Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "proxpipe-phase1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [{
+            "value1": "={{ $json.action }}",
+            "operation": "equal",
+            "value2": "edited"
+          }]
+        }
+      },
+      "id": "filter-in-progress",
+      "name": "Filter: In Progress Only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $env.GITHUB_OWNER }}/{{ $json.projects_v2_item.content_node_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-issue",
+      "name": "Get Issue Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "=http://localhost:8080/v1/messages",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "x-api-key", "value": "proxpipe" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gemini-2.0-flash" },
+            { "name": "max_tokens", "value": 4096 },
+            { "name": "messages", "value": "=[{\"role\": \"user\", \"content\": \"Implement GitHub issue: \" + $json.title + \"\\n\\n\" + $json.body}]" }
+          ]
+        }
+      },
+      "id": "call-ai",
+      "name": "Call AI (Gemini via Proxy)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:4000/pipeline/build-pr",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { repoOwner: $env.GITHUB_OWNER, repoName: $node['Get Issue Details'].json.repository?.name, branchName: 'auto/issue-' + $node['Get Issue Details'].json.number, commitMessage: 'fix: auto-implement #' + $node['Get Issue Details'].json.number, generatedCode: $node['Call AI (Gemini via Proxy)'].json.content[0].text, issueNumber: $node['Get Issue Details'].json.number } }}"
+      },
+      "id": "build-pr",
+      "name": "Build PR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "GitHub Projects Webhook": {
+      "main": [[{ "node": "Filter: In Progress Only", "type": "main", "index": 0 }]]
+    },
+    "Filter: In Progress Only": {
+      "main": [[{ "node": "Get Issue Details", "type": "main", "index": 0 }]]
+    },
+    "Get Issue Details": {
+      "main": [[{ "node": "Call AI (Gemini via Proxy)", "type": "main", "index": 0 }]]
+    },
+    "Call AI (Gemini via Proxy)": {
+      "main": [[{ "node": "Build PR", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "proxpipe" }, { "name": "phase1" }]
+}

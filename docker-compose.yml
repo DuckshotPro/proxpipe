@@ -1,0 +1,46 @@
+version: '3.9'
+
+services:
+
+  # ---- n8n (self-hosted, free forever) ----
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: proxpipe-n8n
+    restart: unless-stopped
+    ports:
+      - '5678:5678'
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=America/Chicago
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/home/node/.n8n/workflows:ro
+    networks:
+      - proxpipe
+
+  # ---- proxpipe webhook receiver ----
+  webhook:
+    build:
+      context: .
+      dockerfile: Dockerfile.webhook
+    container_name: proxpipe-webhook
+    restart: unless-stopped
+    ports:
+      - '4000:4000'
+    env_file: .env
+    networks:
+      - proxpipe
+
+  # ---- antigravity-proxy (external, point at it) ----
+  # Not built here — runs on your host or another container
+  # Set ANTIGRAVITY_URL in .env
+
+volumes:
+  n8n_data:
+
+networks:
+  proxpipe:
+    driver: bridge
